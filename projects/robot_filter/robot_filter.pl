@@ -2,10 +2,60 @@
 #
 # robot_filter.pl
 #
-# The start-stop script that will go into the /usr/local/etc/rc.d/ directory
+# The purpose of this program is to screen unwanted telemarketing robots from
+# repeated calls by using the modem to identify the caller and pickup and answer
+# the phone (negotiate connection to dialing modem).  With some luck this may
+# actually encourage the telemarketer to remove your number from their calling
+# list but at the very least they'll be prevented from connecting with an actual
+# human.
 #
-# It is also the name of the log file in the /var/log/ directory WITH a ".log"
-# file extension.
+# Requirements:
+# 1 modem with caller id (something like the USRobotics USR5637 USB modem)
+# 1 computer running perl (I'm using FreeBSD 10, but perl runs on many platforms)
+# 1 copy of Device::Modem from CPAN (http://search.cpan.org/perldoc?Device%3A%3AModem)
+#
+# The program runs as a daemon, storing it's process id in the robot_filter.pid
+# file.  To shutdown the program simply kill the process id and the program will
+# terminate.  On startup the robot filter loads it's configuration from a comma
+# separated value file caller_config.csv, it has a format of:
+#
+# entry_type|phone_number|caller_id_name
+#
+# For example:
+#
+# w|2065551212|
+#
+# means whitelist number 2065551212, which allows calls from that number to pass
+# through without screening.  The caller_id_name is optional.  By default the
+# filter will allow calls to pass through and store the caller id information in
+# a file unknown_callers.csv for later examination.  To blacklist a caller and
+# screen them out, in the caller_config.csv file create an entry like one of:
+#
+# B||
+# B|4805551212|
+# B|4045551212|MRROBOTO
+# 
+# The first entry B|| will pick up and screen all calls where the name and number
+# are blocked from caller id.  The second entry B|4805551212| will pick up and
+# screen all calls identified as the number 4805551212.  The third entry
+# B|4045551212|MRROBOTO picks up and screens all calls from the number 4045551212
+# or any calls originating with the caller id name of MRROBOTO (which may be useful
+# for screening telemarketing companies using many different numbers).  A record
+# of all calls the filter answered is stored in the answered_calls.csv file.  The
+# format of both answered_calls.csv and unknown_callers.csv is:
+#
+# "date_time_stamp","caller_number","caller_name"
+#
+# for example:
+#
+# "2014-03-21T20:15:31","","O"
+#
+# represents a call at 8:15 pm on March 21st, 2014 from a blocked number with a
+# caller id name of 'O' (meaning Out of Area).
+#
+# This script is free for noncommercial use in part or in full and provided with
+# absolutely no warranty of any kind whatsoever.
+#
 
 
 use strict;
@@ -411,6 +461,8 @@ if ( $loggingOn )
    select( ( select( LOG ), $| = 1 )[ 0 ] ); # turn off buffering for log file (set hot filehandles)
 
    log_entry( $daemonName . ' starting up...' );
+
+   $loggingOn = 2;
 }
 
 
@@ -506,7 +558,7 @@ while ( !$shutdown )
 {
    # listen for incoming RINGs from modem
 
-   my $cid_info = $modem->answer( undef, 10 );  # 10 second timeout
+   my $cid_info = $modem->answer( undef, 10000 );  # 10 second timeout
 
    if ( defined( $cid_info ) && ( $cid_info eq 'RING' ) )
    {
@@ -594,7 +646,7 @@ while ( !$shutdown )
          $ringCount = 0;
       }
 
-      sleep( 1 );
+      select( undef, undef, undef, 0.100 );
    }
 
    # repeat until shutdown
@@ -605,7 +657,7 @@ while ( !$shutdown )
 
 END
 {
-   if ( $loggingOn )
+   if ( 2 == $loggingOn )
    {
       my $summary = "Identified " . ( $whitelistCall + $blacklistCall + $unknownCall ) . " total calls ";
 
