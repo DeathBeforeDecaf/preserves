@@ -38,7 +38,6 @@ either expressed or implied, of the FreeBSD Project.
       author_email="waltersinformatics@gmail.com">
     <Require feature="google.calendar-0.5" />
     <Require feature="dynamic-height"/>
-    <Require feature="minimessage" />
     <Optional feature="google.calendar-0.5.read"/> 
    </ModulePrefs>
    <Content type="html">
@@ -772,15 +771,6 @@ either expressed or implied, of the FreeBSD Project.
          google.calendar.showDate( parseInt( from_year, 10 ), from_month, parseInt( from_dayOfMonth, 10 ) );
 
          google.calendar.refreshEvents();
-
-/*
-         var backButton = window.top.document.getElementsByClassName( 'ep-ea-back-btn' );
-
-         if ( backButton && backButton[ 0 ] )
-         {
-            backButton[ 0 ].click();
-         }
-*/
       }
    }
 
@@ -1297,8 +1287,6 @@ either expressed or implied, of the FreeBSD Project.
    {
       syncValue( 'txnrange', 'txnlimit' );
 
-//      window.top.document.getElementsByClassName( "script-application-sidebar" )[ 0 ].style.width = '500px';
-
       // Force the screen to resize
       gadgets.window.adjustHeight();
 
@@ -1309,8 +1297,6 @@ either expressed or implied, of the FreeBSD Project.
       statusArea.innerHTML = statusAreaText;
    }
 
-
-// http://www.google.com/calendar/render?gadgeturl=http://users.speakeasy.net/~antonw/hosted/calendar_search_replace_0_1.xml 
 
 function escapeEntities( input )
 {
