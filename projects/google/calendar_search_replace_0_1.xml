@@ -1,0 +1,2084 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<Module>
+   <ModulePrefs
+      height="500"
+      title="Search/Replace"
+      description="Quickly update multiple events based on search parameters."
+      author="Walters Informatics"
+      author_email="waltersinformatics@gmail.com">
+    <Require feature="google.calendar-0.5" />
+    <Require feature="dynamic-height"/>
+    <Require feature="minimessage" />
+    <Optional feature="google.calendar-0.5.read"/> 
+   </ModulePrefs>
+   <Content type="html">
+     <![CDATA[
+<!DOCTYPE html>
+<html lang="en">
+<meta charset="utf-8" />
+<head>
+<style type="text/css">
+
+   table
+   {
+      border-spacing: 0px;
+      border-collapse: collapse;
+      width: 200px;
+   }
+
+   td, th
+   {
+      text-align: left;
+   }
+
+   .small
+   {
+      font-size: smaller;
+   }
+
+   td.enabled
+   {
+      color: #000;
+   }
+
+   td.disabled
+   {
+      color: #999;
+   }
+
+   input[ type="radio" ]
+   {
+       -webkit-appearance: checkbox; /* Chrome, Safari, Opera */
+       -moz-appearance: checkbox;    /* Firefox */
+       -ms-appearance: checkbox;     /* not currently supported */
+   }
+
+   input[ type="text" ][ enabled ]
+   {
+      border: 2px solid #000000;
+   }
+
+   div.container
+   {
+      position: relative;
+   }
+
+   div.content
+   {
+      position: absolute;
+      max-width: 100%;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+   }
+
+   code
+   {
+      white-space: pre-wrap;
+   }
+
+</style>
+
+<script type="text/javascript">
+
+   var DAYS_IN_MONTH = [ 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 ];
+
+   var MONTHS = [ "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" ];
+
+   var DAYS = [ "SU", "MO", "TU", "WE", "TH", "FR", "SA" ];
+
+   var CALENDARS = [ "primary" ];
+
+   var CALENDAR_FIELDS = 'kind,id,status,htmlLink,created,updated,summary,description,creator,organizer,start,end,recurrence,recurringEventId,originalStartTime';
+
+   var GAPI_SCOPES = [ 'https://www.googleapis.com/auth/calendar' ];
+
+   var selectedCalendarId = 'primary';
+
+   var now = new Date();
+
+   var DAYS_IN_MONTH_INDEX = now.getMonth();
+
+   var lastOperation = {};
+
+   var findVector = [];
+   var findIndex = 0;
+
+   var statusAreaText = "";
+
+   var debugOutput = false;
+
+   function createCookie( name, value, days )
+   {
+      var expires = '';
+
+      if ( days )
+      {
+         var date = new Date();
+
+         date.setTime( date.getTime() + ( days * 24 * 60 * 60 * 1000 ) );
+
+         expires = '; expires=' + date.toGMTString();
+      }
+
+      document.cookie = name + '=' + value + expires + '; path=/';
+   }
+
+   function readCookie( name )
+   {
+      var namePrefix = name + '=';
+
+      var cookieVector = document.cookie.split( ';' );
+
+      for( var i = 0 ; i < cookieVector.length; i++ )
+      {
+         var cookie = cookieVector[ i ];
+
+         // ltrim current segment
+         cookie = cookie.replace( /^\s+/, '' );
+
+         if ( 0 === cookie.indexOf( namePrefix ) )
+         {
+            return cookie.substring( namePrefix.length, cookie.length );
+         }
+      }
+
+      return null;
+   }
+
+
+   function isLeapYear( year )
+   {
+      if ( ( 0 === ( year % 4 ) ) && ( 0 !== ( year % 100 ) ) )
+      {
+         return true;
+      }
+
+      return ( 0 === ( year % 400 ) );
+   }
+
+   function updateClassNameById( idVector, name )
+   {
+      for ( var i = 0; i < idVector.length; i++ )
+      {
+         var element = document.getElementById( idVector[ i ] );
+
+         element.className = name;
+      }
+   }
+
+   function updateDisabledStateById( idVector, state )
+   {
+      for ( var i = 0; i < idVector.length; i++ )
+      {
+         var element = document.getElementById( idVector[ i ] );
+
+         element.disabled = state;
+      }
+   }
+
+   function updateDisabledStateByName( nameVector, state )
+   {
+      for ( var i = 0; i < nameVector.length; i++ )
+      {
+         var elements = document.getElementsByName( nameVector[ i ] );
+
+         for ( var j = 0; j < elements.length; j++ )
+         {
+            elements[ j ].disabled = state;
+         }
+      }
+   }
+
+   function renderDayOfMonthSelectHtml( month, year, selectedDayOfMonth )
+   {
+      var lastDayOfMonth = ( DAYS_IN_MONTH[ month ] === 28 && isLeapYear( year ) ) ? 29 : DAYS_IN_MONTH[ month ];
+
+      var result = '';
+
+      for ( var i = 1; i <= lastDayOfMonth; ++i )
+      {
+        result += '<option value="' + i + ( selectedDayOfMonth === i ? '" SELECTED="true"' : '"' ) + '>' + i + '</option>';
+      }
+
+      return result;
+   }
+
+   function onChangeCalendarId( calendarCtrl )
+   {
+      selectedCalendarId = calendarCtrl.options[ calendarCtrl.selectedIndex ].value;
+   }
+
+   function onChangeMonth( prefixStr, monthCtrl )
+   {
+      if ( DAYS_IN_MONTH[ DAYS_IN_MONTH_INDEX ] !== DAYS_IN_MONTH[ monthCtrl.selectedIndex ] )
+      {
+         var monthStr = monthCtrl.options[ monthCtrl.selectedIndex ].value;
+
+         var yearCtrl = document.getElementById( prefixStr + "_year" );
+
+         var year = parseInt( yearCtrl.options[ yearCtrl.selectedIndex ].value, 10 );
+
+         var dayOfMonthCtrl = document.getElementById( prefixStr + "_dayOfMonth" );
+
+         var selectedDayOfMonth = parseInt( dayOfMonthCtrl.options[ dayOfMonthCtrl.selectedIndex ].value, 10 );
+
+         dayOfMonthCtrl.innerHTML = renderDayOfMonthSelectHtml( monthCtrl.selectedIndex, year, selectedDayOfMonth );
+      }
+
+      DAYS_IN_MONTH_INDEX = monthCtrl.selectedIndex;
+   }
+
+   function onChangeYear( prefixStr, yearStr )
+   {
+      var monthCtrl = document.getElementById( prefixStr + "_month" );
+
+      if ( 1 === monthCtrl.selectedIndex )
+      {
+         var month = monthCtrl.selectedIndex;
+
+         var year = parseInt( yearStr, 10 );
+
+         var dayOfMonthCtrl = document.getElementById( prefixStr + "_dayOfMonth" );
+
+         var selectedDayOfMonth = parseInt( dayOfMonthCtrl.options[ dayOfMonthCtrl.selectedIndex ].value, 10 );
+
+         dayOfMonthCtrl.innerHTML = renderDayOfMonthSelectHtml( monthCtrl.selectedIndex, year, selectedDayOfMonth );
+      }
+   }
+
+   function eventDateSelector( prefixStr, selectedMonth, selectedDayOfMonth, selectedYear, selectAdjunctStr )
+   {
+      var html = '<select id="' + prefixStr + '_month" onChange="onChangeMonth( \'' + prefixStr + '\', this );"' + selectAdjunctStr + ' autocomplete="off">';
+
+      for ( var i = 0; i < MONTHS.length; ++i )
+      {
+         html += '<option value="' + i + ( selectedMonth === i ? '" SELECTED="true"' : '"' ) + '>' + MONTHS[ i ] + '</option>';
+      }
+
+      html += '</select>';
+
+      html += '<select id="' + prefixStr + '_dayOfMonth"' + selectAdjunctStr + ' autocomplete="off">';
+
+      html += renderDayOfMonthSelectHtml( selectedMonth, selectedYear, selectedDayOfMonth );
+
+      html += '</select>';
+
+      html += '<select id="' + prefixStr + '_year" onChange="onChangeYear( \'' + prefixStr + '\', this.options[ this.selectedIndex ].value )"' + selectAdjunctStr + ' autocomplete="off">';
+
+      for ( var i = now.getFullYear() - 20; i <= ( now.getFullYear() + 20 ); ++i )
+      {
+         html += '<option value="' + i + ( selectedYear === i ? '" SELECTED="true"' : '"' ) + '>' + i + '</option>';
+      }
+
+      html += '</select>';
+
+      document.write( html );
+   }
+
+   function onChangeRecurrenceInterval( ctrl )
+   {
+      var changedInterval = false;
+      var changedDayOfWeek = false;
+
+      var recurrenceInterval = document.getElementById( 'find_recr_rpt' );
+
+      if ( recurrenceInterval && recurrenceInterval.checked )
+      {
+         var findRecurrenceInterval = document.getElementById( 'find_recr_interval' );
+         var replaceRecurrenceInterval = document.getElementById( 'repl_recr_interval' );
+
+         if ( findRecurrenceInterval.selectedIndex != replaceRecurrenceInterval.selectedIndex )
+         {
+            changedInterval = true;
+         }
+      }
+
+      do
+      {
+         var recurrenceDayOfWeek = document.getElementById( 'find_recr_dow' );
+
+         if ( recurrenceDayOfWeek && recurrenceDayOfWeek.checked )
+         {
+            var findDow = document.getElementById( 'find_dow_su' );
+            var replaceDow = document.getElementById( 'repl_dow_su' );
+
+            if ( findDow.checked !== replaceDow.checked )
+            {
+               changedDayOfWeek = true;
+
+               continue;
+            }
+
+            findDow = document.getElementById( 'find_dow_mo' );
+            replaceDow = document.getElementById( 'repl_dow_mo' );
+
+            if ( findDow.checked !== replaceDow.checked )
+            {
+               changedDayOfWeek = true;
+
+               continue;
+            }
+
+            findDow = document.getElementById( 'find_dow_tu' );
+            replaceDow = document.getElementById( 'repl_dow_tu' );
+
+            if ( findDow.checked !== replaceDow.checked )
+            {
+               changedDayOfWeek = true;
+
+               continue;
+            }
+
+            findDow = document.getElementById( 'find_dow_we' );
+            replaceDow = document.getElementById( 'repl_dow_we' );
+
+            if ( findDow.checked !== replaceDow.checked )
+            {
+               changedDayOfWeek = true;
+
+               continue;
+            }
+
+            findDow = document.getElementById( 'find_dow_th' );
+            replaceDow = document.getElementById( 'repl_dow_th' );
+
+            if ( findDow.checked !== replaceDow.checked )
+            {
+               changedDayOfWeek = true;
+
+               continue;
+            }
+
+            findDow = document.getElementById( 'find_dow_fr' );
+            replaceDow = document.getElementById( 'repl_dow_fr' );
+
+            if ( findDow.checked !== replaceDow.checked )
+            {
+               changedDayOfWeek = true;
+            }
+
+            // we don't need to check Saturday :^P
+         }
+      }
+      while ( false );
+
+
+      if ( changedInterval || changedDayOfWeek )
+      {
+         var findStartCheckbox = document.getElementById( "find_start" );
+
+         if ( findStartCheckbox && ( false === findStartCheckbox.checked ) )
+         {
+            findStartCheckbox.checked = true;
+
+            updateDisabledStateById( [ "find_start_month", "find_start_dayOfMonth", "find_start_year" ], false );
+
+            updateDisabledStateById( [ "repl_start_month", "repl_start_dayOfMonth", "repl_start_year" ], false );
+         }
+      }
+      else
+      {
+         var findStartCheckbox = document.getElementById( "find_start" );
+
+         if ( findStartCheckbox && ( true === findStartCheckbox.checked ) )
+         {
+            findStartCheckbox.checked = false;
+
+            updateDisabledStateById( [ "find_start_month", "find_start_dayOfMonth", "find_start_year" ], true );
+
+            updateDisabledStateById( [ "repl_start_month", "repl_start_dayOfMonth", "repl_start_year" ], true );
+         }
+      }
+   }
+
+   function eventRecurrenceIntervalSelector( prefixStr, selectedInterval )
+   {
+      var html = '<select id="' + prefixStr + '_recr_interval" autocomplete="off" onChange="onChangeRecurrenceInterval(this)">';
+
+      for ( var i = 1; i <= 20; i++ )
+      {
+         if ( 1 !== i )
+         {
+            if ( selectedInterval !== i )
+            {
+               html += '<option value="' + i + '" title="repeat every ' + i + ' weeks">' + i + '</option>';
+            }
+            else
+            {
+               html += '<option value="' + i + '" title="repeat every ' + i + ' weeks" SELECTED="true">' + i + '</option>';
+            }
+         }
+         else if ( 1 !== selectedInterval )
+         {
+            html += '<option value="1" title="repeat every week">1</option>';
+         }
+         else
+         {
+            html += '<option value="1" title="repeat every week" selected="true">1</option>';
+         }
+      }
+
+      html += '</select>';
+
+      document.write( html );
+   }
+
+   function onToggleEndDate( control )
+   {
+      if ( false === control.checked )
+      {
+         updateDisabledStateById( [ "to_month", "to_dayOfMonth", "to_year" ], true );
+
+         var txnRange = document.getElementById( 'txnrange' );
+         var txnLimit = document.getElementById( 'txnlimit' );
+
+         txnRange.disabled = false;
+         txnLimit.disabled = false;
+      }
+      else
+      {
+         updateDisabledStateById( [ "to_month", "to_dayOfMonth", "to_year" ], false );
+
+         var txnRange = document.getElementById( 'txnrange' );
+         var txnLimit = document.getElementById( 'txnlimit' );
+
+         txnRange.disabled = true;
+         txnLimit.disabled = true;
+      }
+
+      return true;
+   }
+
+   function onToggleStartDate( control )
+   {
+      if ( false === control.checked )
+      {
+         updateDisabledStateById( [ "find_start_month", "find_start_dayOfMonth", "find_start_year" ], true );
+
+         updateDisabledStateById( [ "repl_start_month", "repl_start_dayOfMonth", "repl_start_year" ], true );
+      }
+      else
+      {
+         updateDisabledStateById( [ "find_start_month", "find_start_dayOfMonth", "find_start_year" ], false );
+
+         updateDisabledStateById( [ "repl_start_month", "repl_start_dayOfMonth", "repl_start_year" ], false );
+      }
+
+      return true;
+   }
+
+   function onChangeMatch( control )
+   {
+
+      if ( false === control.checked )
+      {
+         if ( "find_recr_rpt" === control.id )
+         {
+            updateClassNameById( [ "find_rpt_data", "repl_rpt_data" ], "disabled" );
+
+            updateDisabledStateById( [ "find_recr_interval", "find_recr_frequency", "repl_recr_interval", "repl_recr_frequency" ], true );
+         }
+         else // if ( "find_recr_dow" === control.id )
+         {
+            updateClassNameById( [ "find_dow_data_su", "find_dow_data_mo", "find_dow_data_tu", "find_dow_data_we", "find_dow_data_th", "find_dow_data_fr", "find_dow_data_sa", "repl_dow_data_su", "repl_dow_data_mo", "repl_dow_data_tu", "repl_dow_data_we", "repl_dow_data_th", "repl_dow_data_fr", "repl_dow_data_sa" ], "disabled" );
+
+            updateDisabledStateByName( [ "find_dow", "repl_dow" ], true );
+         }
+      }
+      else  // control enabled
+      {
+         if ( "find_recr_rpt" === control.id )
+         {
+            updateClassNameById( [ "find_rpt_data", "repl_rpt_data" ], "enabled" );
+
+            updateDisabledStateById( [ "find_recr_interval", "find_recr_frequency", "repl_recr_interval", "repl_recr_frequency" ], false );
+         }
+         else
+         {
+            updateClassNameById( [ "find_dow_data_su", "find_dow_data_mo", "find_dow_data_tu", "find_dow_data_we", "find_dow_data_th", "find_dow_data_fr", "find_dow_data_sa", "repl_dow_data_su", "repl_dow_data_mo", "repl_dow_data_tu", "repl_dow_data_we", "repl_dow_data_th", "repl_dow_data_fr", "repl_dow_data_sa" ], "enabled" );
+
+            updateDisabledStateByName( [ "find_dow", "repl_dow" ], false );
+         }
+      }
+
+      return true;
+   }
+
+
+   function clickFind( form )
+   {
+      var findStr = form.find_text_val.value;
+
+      var replaceStr = form.repl_text_val.value;
+
+      var from_month = ( form.from_month.selectedIndex + 1 );
+      var from_dayOfMonth = form.from_dayOfMonth.options[ form.from_dayOfMonth.selectedIndex ].value;
+      var from_year = form.from_year.options[ form.from_year.selectedIndex ].value;
+
+      var endDateBool = form.match_end.checked;
+
+      var to_month = ( form.to_month.selectedIndex + 1 );
+      var to_dayOfMonth = form.to_dayOfMonth.options[ form.to_dayOfMonth.selectedIndex ].value;
+      var to_year = form.to_year.options[ form.to_year.selectedIndex ].value;
+
+      var recurrenceFindBool = form.find_recr_rpt.checked;
+
+      var findRecurrenceInterval = form.find_recr_interval.options[ form.find_recr_interval.selectedIndex ].value;
+      var findRecurrenceUnits = form.find_recr_frequency.options[ form.find_recr_frequency.selectedIndex ].value;
+
+      var replaceRecurrenceInterval = form.repl_recr_interval.options[ form.repl_recr_interval.selectedIndex ].value;
+      var replaceRecurrenceUnits = form.repl_recr_frequency.options[ form.repl_recr_frequency.selectedIndex ].value;
+
+      var dayOfWeekFindBool = form.find_recr_dow.checked;
+
+      var findDayOfWeek = form.find_dow.value;
+      var replaceDayOfWeek = form.repl_dow.value;
+
+      var findStartBool = form.find_start.checked;
+
+      var find_start_month = ( form.find_start_month.selectedIndex + 1 );
+      var find_start_dayOfMonth = form.find_start_dayOfMonth.options[ form.find_start_dayOfMonth.selectedIndex ].value;
+      var find_start_year = form.find_start_year.options[ form.find_start_year.selectedIndex ].value;
+
+      var repl_start_month = ( form.repl_start_month.selectedIndex + 1 );
+      var repl_start_dayOfMonth = form.repl_start_dayOfMonth.options[ form.repl_start_dayOfMonth.selectedIndex ].value;
+      var repl_start_year = form.repl_start_year.options[ form.repl_start_year.selectedIndex ].value;
+
+      var txnLimit = form.txnlimit.value;
+
+      // logical consistency checks
+
+      var fromDate = new Date( from_year, from_month, from_dayOfMonth, 0, 0, 1 );
+
+      var toDate = new Date( to_year, to_month, to_dayOfMonth, 23, 59, 59 );
+
+      var logicalError = "";
+
+      if ( ( true === endDateBool ) && ( toDate.getTime() < fromDate.getTime() ) )
+      {
+         logicalError += "Error: From date must be before To date if enabled.\n";
+      }
+
+      if ( 0 === findStr.length )
+      {
+         logicalError += "Error: Find string value must not be empty.\n";
+      }
+
+      var ctrlClick = ( window.event.ctrlKey || window.event.metaKey ) ? true : false;
+
+      if ( logicalError.length > 0 )
+      {
+         alert( logicalError );
+
+         return true;
+      }
+
+      var statusArea = document.getElementById( 'status' );
+
+      var thisOperation = 
+      {
+         'fromDate': ( from_year.toString() + '-' + from_month.toString() + '-' + from_dayOfMonth.toString() ),
+         'restrictEndDate': endDateBool,
+         'toDate': ( to_year.toString() + '-' + to_month.toString() + '-' + to_dayOfMonth.toString() ),
+
+         'findText': findStr,
+         'replaceText': replaceStr,
+
+         'updateRecurrence': recurrenceFindBool,
+         'findRecurrenceInterval': findRecurrenceInterval,
+         'findRecurrenceUnits': findRecurrenceUnits,
+         'replaceRecurrenceInterval': replaceRecurrenceInterval,
+         'replaceRecurrenceUnits': replaceRecurrenceUnits,
+
+         'updateDayOfWeek': dayOfWeekFindBool,
+         'findDayOfWeek': findDayOfWeek,
+         'replaceDayOfWeek': replaceDayOfWeek,
+
+         'findStart': findStartBool,
+         'findStartDate': ( find_start_year.toString() + '-' + find_start_month.toString() + '-' + find_start_dayOfMonth.toString() ),
+         'replStartDate': ( repl_start_year.toString() + '-' + repl_start_month.toString() + '-' + repl_start_dayOfMonth.toString() ),
+
+         'transactionLimit': txnLimit
+      }
+
+      var statusArea = document.getElementById( 'status' );
+
+      if ( ( false === ctrlClick )
+           && ( lastOperation[ 'fromDate' ] === thisOperation[ 'fromDate' ] )
+           && ( lastOperation[ 'findText' ] === thisOperation[ 'findText' ] ) )
+      {
+         if ( ( findIndex + 1 ) < findVector.length )
+         {
+            findIndex = findIndex + 1;
+
+            statusArea.innerHTML = 'Event ' + ( findIndex + 1 ) + '/' + findVector.length;
+
+            normalizeUserInterface( true );
+         }
+         else
+         {
+            statusArea.innerHTML = 'No more events';
+         }
+
+         return true;
+      }
+
+      lastOperation = thisOperation;
+
+      findVector = [];
+      findIndex = 0;
+
+      statusArea.innerHTML = '';
+
+      var fromDate = new Date( from_year, from_month - 1, from_dayOfMonth, 0, 0, 0 );
+
+      var toDate = new Date( from_year, from_month - 1, from_dayOfMonth, 23, 59, 59 );
+
+      // find single events
+
+      var findResource =
+      {
+        'calendarId': selectedCalendarId,
+        'showDeleted': false,
+        'singleEvents': true,
+        'timeMin': fromDate.toISOString(),
+        'q': findStr,
+        'orderBy': 'startTime',
+        'fields': 'items(' + CALENDAR_FIELDS + ')'
+      }
+
+      if ( true === endDateBool )
+      {
+         var toDate = new Date( to_year, to_month - 1, to_dayOfMonth, 23, 59, 59 );
+
+         findResource[ 'timeMax' ] = toDate.toISOString();
+      }
+      else
+      {
+         findResource[ 'maxResults' ] = txnLimit;
+      }
+
+      var findRequest = gapi.client.calendar.events.list( findResource );
+
+      findRequest.execute( function( response )
+      {
+         var events = response.items;
+
+         if ( events && ( events.length > 0 ) )
+         {
+            var shadowEvents = [];
+            var seenEvents = {};
+
+            for ( var i = 0; i < events.length; i++ )
+            {
+               if ( i > 0 )
+               {
+                  if ( events[ i ][ 'recurringEventId' ] )
+                  {
+                     if ( !seenEvents[ events[ i ][ 'recurringEventId' ] ] )
+                     {
+                        seenEvents[ events[ i ][ 'recurringEventId' ] ] = true;
+
+                        shadowEvents.push( events[ i ] )
+                     }
+                  }
+                  else
+                  {
+                     shadowEvents.push( events[ i ] )
+                  }
+               }
+               else
+               {
+                  shadowEvents.push( events[ 0 ] )
+
+                  if ( events[ 0 ][ 'recurringEventId' ] )
+                  {
+                     seenEvents[ events[ 0 ][ 'recurringEventId' ] ] = true;
+                  }
+               }
+            }
+
+            statusArea.innerHTML = shadowEvents.length + ( ( 1 !== shadowEvents.length ) ? ' events' : ' event' ) + ' found';
+
+            findVector = shadowEvents;
+            findIndex = 0;
+
+            normalizeUserInterface( true );
+         }
+         else
+         {
+            findVector = [];
+            findIndex = 0;
+
+            statusArea.innerHTML = 'No events found';
+
+            if ( debugOutput )
+            {
+               var debug = document.getElementById( 'debug' );
+
+               debug.innerHTML = escapeEntities( JSON.stringify( response ) );
+            }
+         }
+      } );
+
+      return true;
+   }
+
+   function replaceNext( nextIndex, from_year, from_month, from_dayOfMonth )
+   {
+      findIndex = nextIndex;
+
+      if ( findIndex < findVector.length )
+      {
+         var statusArea = document.getElementById( 'status' );
+
+         statusArea.innerHTML = 'Event ' + ( findIndex + 1 ) + '/' + findVector.length;
+
+         normalizeUserInterface( true );
+      }
+      else
+      {
+         google.calendar.showDate( parseInt( from_year, 10 ), from_month, parseInt( from_dayOfMonth, 10 ) );
+
+         google.calendar.refreshEvents();
+
+//         var backButton = window.top.document.getElementsByClassName( 'ep-ea-btn-wrapper ep-ea-back-btn' );
+
+         var backButton = window.top.document.getElementsByClassName( 'ep-ea-back-btn' );
+
+         if ( backButton && backButton[ 0 ] )
+         {
+            backButton[ 0 ].click();
+         }
+      }
+   }
+
+   function clickReplace( form )
+   {
+      if ( findIndex < findVector.length )
+      {
+         var findStr = form.find_text_val.value;
+
+         var replaceStr = form.repl_text_val.value;
+
+         var from_month = ( form.from_month.selectedIndex + 1 );
+         var from_dayOfMonth = form.from_dayOfMonth.options[ form.from_dayOfMonth.selectedIndex ].value;
+         var from_year = form.from_year.options[ form.from_year.selectedIndex ].value;
+
+         var fromDate = new Date( from_year, from_month, from_dayOfMonth, 0, 0, 1 );
+
+         var endDateBool = form.match_end.checked;
+
+         var to_month = ( form.to_month.selectedIndex + 1 );
+         var to_dayOfMonth = form.to_dayOfMonth.options[ form.to_dayOfMonth.selectedIndex ].value;
+         var to_year = form.to_year.options[ form.to_year.selectedIndex ].value;
+
+         var toDate = new Date( to_year, to_month, to_dayOfMonth, 23, 59, 59 );
+
+         var recurrenceFindBool = form.find_recr_rpt.checked;
+
+         var findRecurrenceInterval = form.find_recr_interval.options[ form.find_recr_interval.selectedIndex ].value;
+         var findRecurrenceUnits = form.find_recr_frequency.options[ form.find_recr_frequency.selectedIndex ].value;
+
+         var replaceRecurrenceInterval = form.repl_recr_interval.options[ form.repl_recr_interval.selectedIndex ].value;
+         var replaceRecurrenceUnits = form.repl_recr_frequency.options[ form.repl_recr_frequency.selectedIndex ].value;
+
+         var dayOfWeekFindBool = form.find_recr_dow.checked;
+
+         var findDayOfWeek = form.find_dow.value;
+         var replaceDayOfWeek = form.repl_dow.value;
+
+         var findStartBool = form.find_start.checked;
+
+         var find_start_month = ( form.find_start_month.selectedIndex + 1 );
+         var find_start_dayOfMonth = form.find_start_dayOfMonth.options[ form.find_start_dayOfMonth.selectedIndex ].value;
+         var find_start_year = form.find_start_year.options[ form.find_start_year.selectedIndex ].value;
+
+         var repl_start_month = ( form.repl_start_month.selectedIndex + 1 );
+         var repl_start_dayOfMonth = form.repl_start_dayOfMonth.options[ form.repl_start_dayOfMonth.selectedIndex ].value;
+         var repl_start_year = form.repl_start_year.options[ form.repl_start_year.selectedIndex ].value;
+
+         var txnLimit = form.txnlimit.value;
+
+         // logical consistency checks
+
+         var updateText = undefined;
+
+         if ( findStr !== replaceStr )
+         {
+            updateText = replaceStr;
+         }
+
+         var updateInterval = undefined;
+
+         if ( recurrenceFindBool && ( findRecurrenceInterval !== replaceRecurrenceInterval ) )
+         {
+            updateInterval = replaceRecurrenceInterval;
+         }
+
+         var updateDayOfWeek = undefined;
+
+         if ( dayOfWeekFindBool && ( findDayOfWeek !== replaceDayOfWeek ) )
+         {
+            updateDayOfWeek = replaceDayOfWeek;
+         }
+
+         var startDate = undefined;
+
+         if ( findStartBool || updateInterval || updateDayOfWeek )
+         {
+            if ( false === findStartBool )
+            {
+               startDate = event[ 'start' ][ 'dateTime' ] ? event[ 'start' ][ 'dateTime' ].split( 'T' )[ 0 ] : event[ 'start' ][ 'date' ];
+            }
+            else if ( ( find_start_month !== repl_start_month ) || ( find_start_dayOfMonth !== repl_start_dayOfMonth )
+                 || ( find_start_year !== repl_start_year ) )
+            {
+               startDate = repl_start_year + '-' + repl_start_month + '-' + repl_start_dayOfMonth;
+            }
+         }
+
+         var event = findVector[ findIndex ];
+
+         if ( event[ 'recurringEventId' ] && event[ 'recurringEvent' ] )
+         {
+            // update recurrence
+            event = event[ 'recurringEvent' ];
+
+            if ( event[ 'summary' ] )
+            {
+               event[ 'summary' ] = event[ 'summary' ].replace( findStr, updateText );
+            }
+
+            if ( event[ 'description' ] )
+            {
+               event[ 'description' ] = event[ 'description' ].replace( findStr, updateText );
+            }
+
+            // update recurrence
+            if ( updateInterval || updateDayOfWeek )
+            {
+               var dayOfWeek = 'SU';
+
+               if ( event[ 'start' ] )
+               {
+                  var fromStr = findVector[ findIndex ][ 'start' ][ 'dateTime' ] ? findVector[ findIndex ][ 'start' ][ 'dateTime' ] : findVector[ findIndex ][ 'start' ][ 'date' ];
+
+                  if ( fromStr )
+                  {
+                     var from = new Date( fromStr );
+
+                     dayOfWeek = DAYS[ from.getDay() ];
+                  }
+               }
+
+               var frequency = 'WEEKLY';
+               var interval = '1';
+
+               if ( event[ 'recurrence' ] && ( event[ 'recurrence' ].length > 0 ) )
+               {
+                  // RRULE:FREQ=WEEKLY;INTERVAL=4;BYDAY=TH
+                  var segment = event[ 'recurrence' ][ 0 ].split( ':' );
+
+                  if ( ( 2 === segment.length ) && ( 'RRULE' === segment[ 0 ].toString() ) )
+                  {
+                     var item = segment[ 1 ].split( ';' );
+
+                     for ( var i = 0; i < item.length; i++ )
+                     {
+                        var kvpair = item[ i ].split( '=' );
+
+                        switch ( kvpair[ 0 ] )
+                        {
+                           case 'FREQ': frequency = kvpair[ 1 ];
+                              break;
+                           case 'INTERVAL': interval = kvpair[ 1 ];
+                              break;
+                           case 'BYDAY': dayOfWeek = kvpair[ 1 ];
+                              break;
+                        }
+                     }
+                  }
+               }
+
+               if ( updateInterval )
+               {
+                  interval = updateInterval;
+               }
+
+               if ( updateDayOfWeek )
+               {
+                  dayOfWeek = updateDayOfWeek;
+               }
+
+               event[ 'recurrence' ] = [ 'RRULE:FREQ=' + frequency + ';INTERVAL=' + interval + ';BYDAY=' + dayOfWeek ];
+            }
+
+            // update startDate/endDate
+            if ( startDate )
+            {
+               if ( findVector[ findIndex ][ 'start' ][ 'dateTime' ] )
+               {
+                  var suffix = findVector[ findIndex ][ 'start' ][ 'dateTime' ].split( 'T' )[ 1 ];
+
+                  event[ 'start' ][ 'dateTime' ] = startDate + 'T' + suffix;
+
+                  suffix = findVector[ findIndex ][ 'end' ][ 'dateTime' ].split( 'T' )[ 1 ];
+
+                  event[ 'end' ][ 'dateTime' ] = startDate + 'T' + suffix;
+               }
+               else if ( findVector[ findIndex ][ 'start' ][ 'date' ] )
+               {
+                  event[ 'start' ][ 'date' ] = startDate;
+                  event[ 'end' ][ 'date' ] = startDate;
+               }
+            }
+         }
+         else
+         {
+            // update event instance
+            if ( event[ 'summary' ] )
+            {
+               event[ 'summary' ] = event[ 'summary' ].replace( findStr, updateText );
+            }
+
+            if ( event[ 'description' ] )
+            {
+               event[ 'summary' ] = event[ 'summary' ].replace( findStr, updateText );
+            }
+         }
+
+         var updateRequest =
+            gapi.client.calendar.events.update(
+            {
+               'calendarId': selectedCalendarId,
+               'eventId': event[ 'id' ],
+               'resource': JSON.stringify( event )
+            } );
+
+         updateRequest.execute( function( response )
+         {
+            replaceNext( findIndex + 1, from_year, from_month, from_dayOfMonth );
+         } );
+      }
+      else
+      {
+         var statusArea = document.getElementById( 'status' );
+
+         statusArea.innerHTML = 'No more events';
+      }
+   }
+
+   function syncValue( src, dest )
+   {
+      var destElement = document.getElementById( dest );
+
+      var srcElement = document.getElementById( src );
+
+      destElement.value = srcElement.value;
+   }
+
+   function escapeEntities( input )
+   {
+      var result = input;
+
+      if ( result && ( result.length > 0 ) )
+      {
+         result = "";
+
+         for ( var index = 0, len = input.length; index < len; index++ )
+         {
+            switch ( input.charCodeAt( index ) )
+            {
+               case 38: result += '\&amp;';
+                  break;
+
+               case 60: result += '\&lt;';
+                  break;
+
+               case 62: result += '\&gt;';
+                  break;
+
+               case 34: result += '\&quot;';
+                  break;
+
+               case 39: result += '\&apos;';
+                  break;
+
+               default:
+                  result += input.charAt( index );
+            }
+         }
+      }
+
+      return result;
+   }
+
+   function unescapeEntities( input )
+   {
+      var result = input;
+
+      if ( input && ( 0 < input.length ) )
+      {
+         result = result.replace( /\&amp;|\&lt;|\&gt;|\&quot;|\&apos;/gi, function unescapeContent( entity )
+         {
+            switch ( entity.toLowerCase() )
+            {
+               case '\&amp;' : return '\&';
+               case '\&lt;' : return '\<';
+               case '\&gt;' : return '\>';
+               case '\&quot;' : return '\"';
+               case '\&apos;' : return '\'';
+            }
+         } );
+      }
+
+      return result;
+   }
+
+
+   function toggleView()
+   {
+      var viewToggle = document.getElementById( 'tglvw' );
+      var linkToggle = document.getElementById( 'tgllk' );
+
+      if ( "\u25BC" === viewToggle.innerHTML )
+      {
+         viewToggle.innerHTML = "&#x25B6;";
+
+         var apiPopupRow = document.getElementById( 'apiprow' );
+         var clientPopupRow = document.getElementById( 'cliprow' );
+         var authPopupRow = document.getElementById( 'authprow' );
+
+         apiPopupRow.style.display = 'none';
+         clientPopupRow.style.display = 'none';
+         authPopupRow.style.display = 'none';
+
+         linkToggle.style.textDecoration = '';
+      }
+      else
+      {
+         viewToggle.innerHTML = "&#x25BC;";
+
+         var apiPopupRow = document.getElementById( 'apiprow' );
+         var clientPopupRow = document.getElementById( 'cliprow' );
+         var authPopupRow = document.getElementById( 'authprow' );
+
+         apiPopupRow.style.display = '';
+         clientPopupRow.style.display = '';
+         authPopupRow.style.display = '';
+
+         linkToggle.style.textDecoration = 'none';
+      }
+
+      return true;
+   }
+
+
+   function attemptAuthorization()
+   {
+      var clientCookie = readCookie( 'client' );
+
+      if ( clientCookie )
+      {
+         var clientId =  document.getElementById( 'client' );
+
+         if ( clientId )
+         {
+            clientId.value = clientCookie;
+         }
+         else
+         {
+            statusAreaText = 'ERROR: Authorization lost.';
+         }
+      }
+
+      var apiCookie = readCookie( 'api' );
+
+      if ( apiCookie )
+      {
+         var apiKey =  document.getElementById( 'api' );
+
+         if ( apiKey )
+         {
+            apiKey.value = apiCookie;
+         }
+         else
+         {
+            statusAreaText = 'ERROR: Authorization lost.';
+         }
+      }
+
+      // verify user has authorized this application access
+      var clientAPI = document.getElementById( 'api' );
+
+      if ( clientAPI && ( clientAPI.value.length > 0 ) )
+      {
+         gapi.client.setApiKey( clientAPI.value );
+
+         window.setTimeout( checkClientAccess, 1 );
+      }
+      else
+      {
+         // show authorization button
+         var authorizeBtn = document.getElementById( 'authorizeBtn' );
+
+         if ( authorizeBtn )
+         {
+            authorizeBtn.style.display = '';
+         }
+      }
+   }
+
+   function checkClientAccess( result )
+   {
+      var clientId = document.getElementById( 'client' );
+
+      if ( clientId && ( clientId.value.length > 0 ) )
+      {
+         // clientId identifies application to OAuth2.0
+         gapi.auth.authorize( { client_id: clientId.value, scope: GAPI_SCOPES, immediate: true }, checkAuthorizationResult );
+      }
+      else
+      {
+         alert( "Client ID must be set before authorization can complete" );
+      }
+   }
+
+
+   /**
+    * Print the summary and start datetime/date of the next ten events in
+    * the authorized user's calendar. If no events are found an
+    * appropriate message is printed.
+    */
+   function listCalendars()
+   {
+      var request = gapi.client.calendar.calendarList.list( { 'minAccessRole': 'owner', 'showDeleted': false } );
+
+      request.execute( function( response )
+      {
+         var calendars = response.items;
+
+         var optionsHTML = "";
+
+         if ( calendars.length > 0 )
+         {
+            CALENDARS = [];
+
+            // iterate through list of calendar items
+            // set primary calendar id
+
+            for ( var i = 0; i < calendars.length; i++ )
+            {
+               var calendarId = calendars[ i ].id;
+
+               CALENDARS.push( calendarId );
+
+               optionsHTML += '<option value=\"' + calendarId + '\"'
+
+               if ( true === calendars[ i ].primary )
+               {
+                  selectedCalendarId = calendarId;
+
+                  optionsHTML += ' selected="true"';
+               }
+
+               optionsHTML += '>' + calendarId + '</option>';
+            }
+
+            // regenerate select list options
+
+            var calendarSelect =  document.getElementById( 'calendarId' );
+
+            if ( calendarSelect )
+            {
+               calendarSelect.innerHTML = optionsHTML;
+            }
+         }
+
+     } );
+   }
+
+
+   function checkAuthorizationResult( result )
+   {
+      if ( result && !result.error )
+      {
+         var clientId =  document.getElementById( 'client' );
+         var apiKey =  document.getElementById( 'api' );
+
+         createCookie( 'client', clientId.value, null );
+         createCookie( 'api', apiKey.value, null );
+
+         // perform an authorization refresh 5 minutes before expiry
+         var nextRefreshMS = ( result.expires_in - 5 * 60 ) * 1000;
+
+         setTimeout( checkClientAccess, nextRefreshMS );
+
+         // hide authorization button
+         var authorizeBtn = document.getElementById( 'authorizeBtn' );
+
+         authorizeBtn.style.display = 'none';
+
+         var statusArea = document.getElementById( 'status' );
+
+         if ( statusArea )
+         {
+            statusAreaText = '';
+
+            statusArea.innerHTML = '';
+         }
+
+         // load calendar list
+         gapi.client.load( 'calendar', 'v3', listCalendars );
+      }
+      else
+      {
+         // show authorization button
+         var authorizeBtn = document.getElementById( 'authorizeBtn' );
+
+         authorizeBtn.style.display = '';
+      }
+   }
+
+   function onClickAuthorize( event )
+   {
+      var clientId =  document.getElementById( 'client' );
+      var apiKey =  document.getElementById( 'api' );
+
+      if ( ( apiKey && ( apiKey.value.length > 0 ) ) &&  ( clientId && ( clientId.value.length > 0 ) ) )
+      {
+         // clientId identifies application to OAuth2.0
+         gapi.auth.authorize( { client_id: clientId.value, scope: GAPI_SCOPES, immediate: false }, checkAuthorizationResult );
+      }
+      else
+      {
+         var message = ( apiKey && ( apiKey.value.length > 0 ) ) ? "" : "API Key";
+
+         message += ( clientId && ( clientId.value.length > 0 ) ) ? "" : ( ( message.length > 0 ) ? " and Client ID" : "Client ID" );
+
+         alert( message + " must be set before authorization can complete" );
+      }
+   }
+
+
+   window.onload = function()
+   {
+      syncValue( 'txnrange', 'txnlimit' );
+
+//      window.top.document.getElementsByClassName( "script-application-sidebar" )[ 0 ].style.width = '500px';
+
+      // Force the screen to resize
+      gadgets.window.adjustHeight();
+
+      google.calendar.read.subscribeToEvents( selectCalendarEvents );
+
+      var statusArea =  document.getElementById( 'status' );
+
+      statusArea.innerHTML = statusAreaText;
+   }
+
+
+// http://www.google.com/calendar/render?gadgeturl=http://users.speakeasy.net/~antonw/hosted/calendar_search_replace_0_1.xml 
+
+function escapeEntities( input )
+{
+   var result = input;
+
+   if ( result && ( result.length > 0 ) )
+   {
+      result = "";
+
+      for ( var index = 0, len = input.length; index < len; index++ )
+      {
+         switch ( input.charCodeAt( index ) )
+         {
+            case 38: result += '\&amp;';
+               break;
+
+            case 60: result += '\&lt;';
+               break;
+
+            case 62: result += '\&gt;';
+               break;
+
+            case 34: result += '\&quot;';
+               break;
+
+            case 39: result += '\&apos;';
+               break;
+
+            default:
+               result += input.charAt( index );
+         }
+      }
+   }
+
+   return result;
+}
+
+
+function selectItemByValue( element, value )
+{
+   for ( var i = 0; i < element.options.length; i++ )
+   {
+      if ( element.options[ i ].value === value )
+      {
+         element.selectedIndex = i;
+
+         break;
+      }
+   }
+}
+
+function showSelectedEvent( event )
+{
+   var dayOfWeek = 'SU';
+
+   if ( event[ 'start' ] )
+   {
+      var fromStr = event[ 'start' ][ 'dateTime' ] ? event[ 'start' ][ 'dateTime' ] : event[ 'start' ][ 'date' ];
+
+      if ( fromStr )
+      {
+         var from = new Date( fromStr );
+
+         dayOfWeek = DAYS[ from.getDay() ];
+
+         var yearCtrl = document.getElementById( "from_year" );
+
+         if ( yearCtrl )
+         {
+            selectItemByValue( yearCtrl, from.getFullYear().toString() );
+
+            onChangeYear( "from", from.getFullYear().toString() );
+         }
+
+         var monthCtrl = document.getElementById( "from_month" );
+
+         if ( monthCtrl )
+         {
+            monthCtrl.selectedIndex = from.getMonth();
+
+            onChangeMonth( "from", monthCtrl );
+         }
+
+         var dayOfMonthCtrl = document.getElementById( "from_dayOfMonth" );
+
+         if ( dayOfMonthCtrl )
+         {
+            dayOfMonthCtrl.selectedIndex = ( from.getDate() - 1 );
+         }
+      }
+   }
+
+   var frequency = '';
+   var interval = '1';
+
+   if ( event[ 'recurrence' ] || ( event[ 'recurringEvent' ] && event[ 'recurringEvent' ][ 'recurrence' ] ) )
+   {
+      var recurrenceRule = ( event[ 'recurrence' ] ? event[ 'recurrence' ] : event[ 'recurringEvent' ][ 'recurrence' ] ).toString();
+
+      // RRULE:FREQ=WEEKLY;INTERVAL=4;BYDAY=TH
+      var segment = recurrenceRule.split( ':' );
+
+      if ( ( 2 === segment.length ) && ( 'RRULE' === segment[ 0 ].toString() ) )
+      {
+         var item = segment[ 1 ].split( ';' );
+
+         for ( var i = 0; i < item.length; i++ )
+         {
+            var kvpair = item[ i ].split( '=' );
+
+            switch ( kvpair[ 0 ] )
+            {
+               case 'FREQ': frequency = kvpair[ 1 ];
+                  break;
+               case 'INTERVAL': interval = kvpair[ 1 ];
+                  break;
+               case 'BYDAY': dayOfWeek = kvpair[ 1 ];
+                  break;
+            }
+         }
+      }
+   }
+
+   var startStr = undefined;
+
+   if ( ( event[ 'recurringEvent' ] ) && ( event[ 'recurringEvent' ][ 'start' ] ) )
+   {
+      startStr = event[ 'recurringEvent' ][ 'start' ][ 'dateTime' ] ? event[ 'recurringEvent' ][ 'start' ][ 'dateTime' ] : event[ 'recurringEvent' ][ 'start' ][ 'date' ];
+   }
+
+   if ( event[ 'end' ] )
+   {
+      var endStr = event[ 'end' ][ 'dateTime' ] ? event[ 'end' ][ 'dateTime' ] : event[ 'end' ][ 'date' ];
+
+      if ( endStr )
+      {
+         var to = new Date( endStr );
+
+         var yearCtrl = document.getElementById( "to_year" );
+
+         if ( yearCtrl )
+         {
+            selectItemByValue( yearCtrl, to.getFullYear().toString() );
+
+            onChangeYear( "to", to.getFullYear().toString() );
+         }
+
+         var monthCtrl = document.getElementById( "to_month" );
+
+         if ( monthCtrl )
+         {
+            monthCtrl.selectedIndex = from.getMonth();
+
+            onChangeMonth( "to", monthCtrl );
+         }
+
+         var dayOfMonthCtrl = document.getElementById( "to_dayOfMonth" );
+
+         if ( dayOfMonthCtrl )
+         {
+            dayOfMonthCtrl.selectedIndex = ( to.getDate() - 1 );
+         }
+      }
+   }
+
+   var findText = document.getElementById( 'find_text_val' );
+
+   if ( findText )
+   {
+      findText.value = event[ 'summary' ];
+   }
+
+   var replaceText = document.getElementById( 'repl_text_val' );
+
+   // user clicks event, replace text is empty
+   if ( replaceText && ( replaceText.value.length < 1 ) )
+   {
+      replaceText.value = event[ 'summary' ];
+   }
+
+   if ( 'WEEKLY' === frequency )
+   {
+      var findIntervalChkbox = document.getElementById( 'find_recr_rpt' );
+
+      if ( ( findIntervalChkbox ) && ( false === findIntervalChkbox.checked ) )
+      {
+         onChangeMatch( findIntervalChkbox );
+      }
+
+      var findDayOfWeekChkbox = document.getElementById( 'find_recr_dow' );
+
+      if ( ( findDayOfWeekChkbox ) && ( false === findDayOfWeekChkbox.checked ) )
+      {
+         onChangeMatch( findDayOfWeekChkbox );
+      }
+
+      var findStartChkbox = document.getElementById( 'find_start' );
+
+      if ( ( findStartChkbox ) && ( true === findStartChkbox.checked ) )
+      {
+         onChangeMatch( findStartChkbox );
+      }
+
+      var weekCount = parseInt( interval );
+
+      var findInterval = document.getElementById( "find_recr_interval" );
+
+      if ( findInterval )
+      {
+         findInterval.selectedIndex = ( weekCount - 1 );
+      }
+
+      var replaceInterval = document.getElementById( "repl_recr_interval" );
+
+      if ( replaceInterval )
+      {
+         replaceInterval.selectedIndex = ( weekCount - 1 );
+      }
+
+      // populate recurrence day of week
+
+      var findDOW = document.getElementById( 'find_dow_' + dayOfWeek.toLowerCase() );
+
+      if ( findDOW )
+      {
+         findDOW.checked = true;
+      }
+
+      var replaceDOW = document.getElementById( 'repl_dow_' + dayOfWeek.toLowerCase() );
+
+      if ( replaceDOW )
+      {
+         replaceDOW.checked = true;
+      }
+   }
+   else  // interval not weekly
+   {
+      var findIntervalChkbox = document.getElementById( 'find_recr_rpt' );
+
+      if ( ( findIntervalChkbox ) && ( true === findIntervalChkbox.checked ) )
+      {
+         onChangeMatch( findIntervalChkbox );
+      }
+
+      var findDayOfWeekChkbox = document.getElementById( 'find_recr_dow' );
+
+      if ( ( findDayOfWeekChkbox ) && ( true === findDayOfWeekChkbox.checked ) )
+      {
+         onChangeMatch( findDayOfWeekChkbox );
+      }
+
+      var findStartChkbox = document.getElementById( 'find_start' );
+
+      if ( ( findStartChkbox ) && ( true === findStartChkbox.checked ) )
+      {
+         onChangeMatch( findStartChkbox );
+      }
+   }
+
+   if ( startStr )
+   {
+      var start = new Date( startStr );
+
+      var yearCtrl = document.getElementById( "find_start_year" );
+
+      if ( yearCtrl )
+      {
+         selectItemByValue( yearCtrl, start.getFullYear().toString() );
+
+         onChangeYear( "find_start", start.getFullYear().toString() );
+      }
+
+      yearCtrl = document.getElementById( "repl_start_year" );
+
+      if ( yearCtrl )
+      {
+         selectItemByValue( yearCtrl, from.getFullYear().toString() );
+
+         onChangeYear( "repl_start", from.getFullYear().toString() );
+      }
+
+      var monthCtrl = document.getElementById( "find_start_month" );
+
+      if ( monthCtrl )
+      {
+         monthCtrl.selectedIndex = start.getMonth();
+
+         onChangeMonth( "find_start", monthCtrl );
+      }
+
+      monthCtrl = document.getElementById( "repl_start_month" );
+
+      if ( monthCtrl )
+      {
+         monthCtrl.selectedIndex = from.getMonth();
+
+         onChangeMonth( "repl_start", monthCtrl );
+      }
+
+      var dayOfMonthCtrl = document.getElementById( "find_start_dayOfMonth" );
+
+      if ( dayOfMonthCtrl )
+      {
+         dayOfMonthCtrl.selectedIndex = ( start.getDate() - 1 );
+      }
+
+      dayOfMonthCtrl = document.getElementById( "repl_start_dayOfMonth" );
+
+      if ( dayOfMonthCtrl )
+      {
+         dayOfMonthCtrl.selectedIndex = ( from.getDate() - 1 );
+      }
+   }
+}
+
+function showFoundEvent( event )
+{
+   var fromStr = event[ 'start' ][ 'dateTime' ] ? event[ 'start' ][ 'dateTime' ] : event[ 'start' ][ 'date' ];
+
+   var from = new Date( fromStr );
+
+   var dayOfWeek = DAYS[ from.getDay() ]
+   var frequency = '';
+   var interval = '1';
+
+   if ( event[ 'recurrence' ] || ( event[ 'recurringEvent' ] && event[ 'recurringEvent' ][ 'recurrence' ] ) )
+   {
+      var recurrenceRule = ( event[ 'recurrence' ] ? event[ 'recurrence' ] : event[ 'recurringEvent' ][ 'recurrence' ] ).toString();
+
+      // RRULE:FREQ=WEEKLY;INTERVAL=4;BYDAY=TH
+      var segment = recurrenceRule.split( ':' );
+
+      if ( ( 2 === segment.length ) && ( 'RRULE' === segment[ 0 ].toString() ) )
+      {
+         var item = segment[ 1 ].split( ';' );
+
+         for ( var i = 0; i < item.length; i++ )
+         {
+            var kvpair = item[ i ].split( '=' );
+
+            switch ( kvpair[ 0 ] )
+            {
+               case 'FREQ': frequency = kvpair[ 1 ];
+                  break;
+               case 'INTERVAL': interval = kvpair[ 1 ];
+                  break;
+               case 'BYDAY': dayOfWeek = kvpair[ 1 ];
+                  break;
+            }
+         }
+      }
+   }
+
+   var startStr = undefined;
+
+   if ( ( event[ 'recurringEvent' ] ) && ( event[ 'recurringEvent' ][ 'start' ] ) )
+   {
+      startStr = event[ 'recurringEvent' ][ 'start' ][ 'dateTime' ] ? event[ 'recurringEvent' ][ 'start' ][ 'dateTime' ] : event[ 'recurringEvent' ][ 'start' ][ 'date' ];
+   }
+
+   if ( 'WEEKLY' === frequency )
+   {
+      var weekCount = parseInt( interval );
+
+      var findInterval = document.getElementById( "find_recr_interval" );
+
+      if ( findInterval )
+      {
+         findInterval.selectedIndex = ( weekCount - 1 );
+      }
+
+      var replaceInterval = document.getElementById( "repl_recr_interval" );
+
+      if ( replaceInterval )
+      {
+         replaceInterval.selectedIndex = ( weekCount - 1 );
+      }
+   }
+
+   // populate recurrence day of week
+
+   var findDOW = document.getElementById( 'find_dow_' + dayOfWeek.toLowerCase() );
+
+   if ( findDOW )
+   {
+      findDOW.checked = true;
+   }
+
+   var replaceDOW = document.getElementById( 'repl_dow_' + dayOfWeek.toLowerCase() );
+
+   if ( replaceDOW )
+   {
+      replaceDOW.checked = true;
+   }
+
+   if ( startStr )
+   {
+      var start = new Date( startStr );
+
+      var yearCtrl = document.getElementById( "find_start_year" );
+
+      if ( yearCtrl )
+      {
+         selectItemByValue( yearCtrl, start.getFullYear().toString() );
+
+         onChangeYear( "find_start", start.getFullYear().toString() );
+      }
+
+      yearCtrl = document.getElementById( "repl_start_year" );
+
+      if ( yearCtrl )
+      {
+         selectItemByValue( yearCtrl, from.getFullYear().toString() );
+
+         onChangeYear( "repl_start", from.getFullYear().toString() );
+      }
+
+      var monthCtrl = document.getElementById( "find_start_month" );
+
+      if ( monthCtrl )
+      {
+         monthCtrl.selectedIndex = start.getMonth();
+
+         onChangeMonth( "find_start", monthCtrl );
+      }
+
+      monthCtrl = document.getElementById( "repl_start_month" );
+
+      if ( monthCtrl )
+      {
+         monthCtrl.selectedIndex = from.getMonth();
+
+         onChangeMonth( "repl_start", monthCtrl );
+      }
+
+      var dayOfMonthCtrl = document.getElementById( "find_start_dayOfMonth" );
+
+      if ( dayOfMonthCtrl )
+      {
+         dayOfMonthCtrl.selectedIndex = ( start.getDate() - 1 );
+      }
+
+      dayOfMonthCtrl = document.getElementById( "repl_start_dayOfMonth" );
+
+      if ( dayOfMonthCtrl )
+      {
+         dayOfMonthCtrl.selectedIndex = ( from.getDate() - 1 );
+      }
+   }
+
+   if ( event[ 'htmlLink' ] )
+   { 
+      var segment = event[ 'htmlLink' ].split( '=' );
+
+      if ( 2 === segment.length )
+      {
+         google.calendar.showEvent( segment[ 1 ] );
+      }
+   }
+}
+
+function normalizeUserInterface( showEvent )
+{
+   if ( findIndex < findVector.length )
+   {
+      var event = findVector[ findIndex ];
+
+      if ( false === showEvent )
+      {
+         if ( 'calendar#event' === event[ 'kind' ] )
+         {
+            if ( event[ 'recurringEventId' ] && !event[ 'recurrence' ] )
+            {
+               var getRecurringResource =
+               {
+                  'calendarId': selectedCalendarId,
+                  'eventId': event[ 'recurringEventId' ],
+                  'fields': CALENDAR_FIELDS
+               }
+
+               var getRecurringRequest = gapi.client.calendar.events.get( getRecurringResource );
+
+               getRecurringRequest.execute( function( response )
+               {
+                  var requestEvent = response.result;
+
+                  if ( requestEvent && ( event[ 'recurringEventId' ] === requestEvent.id ) )
+                  {
+                     event[ 'recurringEvent' ] = requestEvent;
+                  }
+
+                  showSelectedEvent( event );
+               } );
+            }
+            else  // single instance
+            {
+               showSelectedEvent( event );
+            }
+         }
+         else  // calendar view click
+         {
+            showSelectedEvent( event );
+         }
+      }
+      else   // true === showEvent
+      {
+         if ( 'calendar#event' === event[ 'kind' ] )
+         {
+            if ( event[ 'recurringEventId' ] && !event[ 'recurrence' ] )
+            {
+               var getRecurringResource =
+               {
+                  'calendarId': selectedCalendarId,
+                  'eventId': event[ 'recurringEventId' ],
+                  'fields': CALENDAR_FIELDS
+               }
+
+               var getRecurringRequest = gapi.client.calendar.events.get( getRecurringResource );
+
+               getRecurringRequest.execute( function( response )
+               {
+                  var requestEvent = response.result;
+
+                  if ( requestEvent && ( event[ 'recurringEventId' ] === requestEvent.id ) )
+                  {
+                     event[ 'recurringEvent' ] = requestEvent;
+                  }
+
+                  showFoundEvent( event );
+
+               } );
+            }
+            else  // show find single instance
+            {
+               showFoundEvent( event );
+            }
+         }
+         else
+         {
+            showFoundEvent( event );
+         }
+      }
+
+      if ( debugOutput )
+      {
+         var debug = document.getElementById( 'debug' );
+
+         debug.innerHTML = escapeEntities( JSON.stringify( event ) );
+      }
+   }
+}
+
+function selectCalendarEvents( event )
+{
+   if ( event && ( undefined === event[ 'details' ] ) )
+   {
+      var calendarEvent = undefined;
+
+      var statusArea = document.getElementById( 'status' );
+
+      if ( statusArea )
+      {
+         statusArea.innerHTML = '';
+      }
+
+      if ( event[ 'id' ] )
+      {
+         var eventId = event[ 'id' ];
+
+         if ( !event[ 'kind' ] )
+         {
+            // decode eid into eventId
+            eventId = atob( eventId );
+
+            eventId = eventId.split( ' ' )[ 0 ];
+
+            var getResource =
+            {
+              'calendarId': selectedCalendarId,
+              'eventId': eventId,
+              'fields': CALENDAR_FIELDS
+            }
+
+            var getRequest = gapi.client.calendar.events.get( getResource );
+
+            getRequest.execute( function( response )
+            {
+               var requestEvent = response.result;
+
+               if ( requestEvent && ( eventId === requestEvent.id ) )
+               {
+                  calendarEvent = requestEvent;
+
+                  if ( 'calendar#event' === calendarEvent[ 'kind' ] )
+                  {
+                     if ( calendarEvent[ 'recurringEventId' ] && !calendarEvent[ 'recurrence' ] )
+                     {
+                        var getRecurringResource =
+                        {
+                           'calendarId': selectedCalendarId,
+                           'eventId': calendarEvent[ 'recurringEventId' ],
+                           'fields': CALENDAR_FIELDS
+                        }
+
+                        var getRecurringRequest = gapi.client.calendar.events.get( getRecurringResource );
+
+                        getRecurringRequest.execute( function( response )
+                        {
+                           var requestEvent = response.result;
+
+                           if ( requestEvent && ( calendarEvent[ 'recurringEventId' ] === requestEvent.id ) )
+                           {
+                              calendarEvent[ 'recurringEvent' ] = requestEvent;
+                           }
+
+                           lastOperation = {};
+
+                           findVector = [ calendarEvent ];
+                           findIndex = 0;
+
+                           normalizeUserInterface( false );
+                        } );
+                     }
+                     else
+                     {
+                        lastOperation = {};
+
+                        findVector = [ calendarEvent ];
+                        findIndex = 0;
+
+                        normalizeUserInterface( false );
+                     }
+                  }
+               }
+               else
+               {
+                  statusArea.innerHTML = 'No events found';
+               }
+            } );
+         }
+         else
+         {
+            calendarEvent = event;
+
+            if ( 'calendar#event' === calendarEvent[ 'kind' ] )
+            {
+               if ( calendarEvent[ 'recurringEventId' ] && !calendarEvent[ 'recurrence' ] )
+               {
+                  var getRecurringResource =
+                  {
+                     'calendarId': selectedCalendarId,
+                     'eventId': calendarEvent[ 'recurringEventId' ],
+                     'fields': CALENDAR_FIELDS
+                  }
+
+                  var getRecurringRequest = gapi.client.calendar.events.get( getRecurringResource );
+
+                  getRecurringRequest.execute( function( response )
+                  {
+                     var requestEvent = response.result;
+
+                     if ( requestEvent && ( calendarEvent[ 'recurringEventId' ] === requestEvent.id ) )
+                     {
+                        calendarEvent[ 'recurringEvent' ] = requestEvent;
+                     }
+
+                     lastOperation = {};
+
+                     findVector = [ calendarEvent ];
+                     findIndex = 0;
+
+                     normalizeUserInterface( false );
+                  } );
+               }
+               else
+               {
+                  lastOperation = {};
+
+                  findVector = [ calendarEvent ];
+                  findIndex = 0;
+
+                  normalizeUserInterface( false );
+               }
+            }
+         }
+      }
+   }
+}
+
+// google.calendar.read.subscribeToEvents( selectCalendarEvents );
+
+</script>
+
+<script src="https://apis.google.com/js/client.js?onload=attemptAuthorization"></script>
+
+</head>
+<body>
+<form id="bulkedit" action="javascript:void(0);" method="post">
+<table>
+<tbody>
+
+<tr><th colspan="8"><a id="tglvw" onClick="toggleView()" href="javascript: void(0)" title="Expand/Collapse authentication credentials view" style="text-decoration: none;">&#x25B6;</a>&nbsp;<a id="tgllk" onClick="toggleView()" href="javascript: void(0)">Credentials</a></th></tr>
+
+<tr id="apiprow" style="display: none;">
+<td colspan="8"><input type="text" id="api" name="api" size="24" title="Google API Key for HTTP Requests"/></td>
+</tr>
+
+<tr id="cliprow" style="display: none;">
+<td colspan="8"><input type="text" id="client" name="client" size="24" title="Google ClientID for OAuth2.0 Authentication"/></td>
+</tr>
+
+<tr id="authprow" style="display: none;">
+<td colspan="8"><button id="authorizeBtn" onclick="onClickAuthorize(event)">Authorize</button><select id="calendarId" autocomplete="off">
+<option value="primary" selected="true" onChange="onChangeCalendarId( this )">primary</option></select></td>
+</tr>
+
+<tr><th colspan="8">Search <input type="checkbox" id="match_end" name="match_end" value="text" title="limit the search range to a specific end date" onChange="onToggleEndDate(this)" /><input type="checkbox" id="find_recr_rpt" name="find_recr_rpt" value="rpt" title="update event recurrence interval" onChange="onChangeMatch(this)" checked /><input type="checkbox" id="find_recr_dow" name="find_recr_dow" value="dow" title="update event recurrence day of week" onChange="onChangeMatch(this)" checked /><input type="checkbox" id="find_start" name="find_start" value="text" title="refresh the start date for the recurring event" onChange="onToggleStartDate(this)"/></th></tr>
+
+<tr>
+<td colspan="8">
+<script type="text/javascript">
+   eventDateSelector( "from", now.getMonth(), now.getDate(), now.getFullYear(), "" );
+</script></td>
+</tr>
+
+<tr>
+<td colspan="8"><script type="text/javascript">
+   var nextWeek = new Date( now.getTime() + 14 * 24 * 60 * 60 * 1000 );
+
+   eventDateSelector( "to", nextWeek.getMonth(), nextWeek.getDate(), nextWeek.getFullYear(), " disabled" );
+</script></td>
+</tr>
+
+<tr>
+<td colspan="8"><input type="text" id="find_text_val" name="find_text_val" size="24" title="Search calendar event title and description for the text value" required/></td>
+</tr>
+
+<tr>
+<td colspan="8" id="find_rpt_data" class="enabled">every <script type="text/javascript">eventRecurrenceIntervalSelector( "find", 4 );</script> <select id="find_recr_frequency" autocomplete="off">
+<option value="weekly">weeks</option>
+</select>
+</td>
+</tr>
+
+<tr>
+<td id="find_dow_data_su" class="enabled" style="font-size: smaller;"><input type="radio" id="find_dow_su" name="find_dow" value="SU" title="Sunday" checked onChange="onChangeRecurrenceInterval(this)"><br/>S</input></td><td id="find_dow_data_mo" class="enabled" style="font-size: smaller;"><input type="radio" id="find_dow_mo" name="find_dow" value="MO" title="Monday" onChange="onChangeRecurrenceInterval(this)"><br/>M</input></td><td id="find_dow_data_tu" class="enabled" style="font-size: smaller;"><input type="radio" id="find_dow_tu" name="find_dow" value="TU" title="Tuesday" onChange="onChangeRecurrenceInterval(this)"><br/>T</input></td><td id="find_dow_data_we" class="enabled" style="font-size: smaller;"><input type="radio" id="find_dow_we" name="find_dow" value="WE" title="Wednesday" onChange="onChangeRecurrenceInterval(this)"><br/>W</input></td><td id="find_dow_data_th" class="enabled" style="font-size: smaller;"><input type="radio" id="find_dow_th" name="find_dow" value="TH" title="Thursday" onChange="onChangeRecurrenceInterval(this)"><br/>T</input></td><td id="find_dow_data_fr" class="enabled" style="font-size: smaller;"><input type="radio" id="find_dow_fr" name="find_dow" value="FR" title="Friday" onChange="onChangeRecurrenceInterval(this)"><br/>F</input></td><td id="find_dow_data_sa" class="enabled" style="font-size: smaller;"><input type="radio" id="find_dow_sa" name="find_dow" value="SA" title="Saturday" onChange="onChangeRecurrenceInterval(this)"><br/>S</input></td><td style="font-size: larger;">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</td>
+</tr>
+
+
+<tr>
+<td colspan="8"><script type="text/javascript">
+   eventDateSelector( "find_start", now.getMonth(), now.getDate(), now.getFullYear(), " disabled" );
+</script></td>
+</tr>
+
+<tr><th colspan="8">&nbsp;</th></tr>
+
+<tr><th colspan="8">Replace</th></tr>
+
+<tr>
+<td colspan="8"><input type="text" id="repl_text_val" name="repl_text_val" size="24" title="Replace any matching calendar event title and descriptions with the text value"/></td>
+</tr>
+
+<tr>
+<td colspan="8" id="repl_rpt_data" class="enabled">every <script type="text/javascript">eventRecurrenceIntervalSelector( "repl", 4 );</script> <select id="repl_recr_frequency">
+<option value="weekly">weeks</option>
+</select>
+</td>
+</tr>
+
+<tr>
+<td id="repl_dow_data_su" class="enabled" style="font-size: smaller;"><input type="radio" id="repl_dow_su" name="repl_dow" value="SU" title="Sunday" checked onChange="onChangeRecurrenceInterval(this)"><br/>S</input></td><td id="repl_dow_data_mo" class="enabled" style="font-size: smaller;"><input type="radio" id="repl_dow_mo" name="repl_dow" value="MO" title="Monday" onChange="onChangeRecurrenceInterval(this)"><br/>M</input></td><td id="repl_dow_data_tu" class="enabled" style="font-size: smaller;"><input type="radio" id="repl_dow_tu" name="repl_dow" value="TU" title="Tuesday" onChange="onChangeRecurrenceInterval(this)"><br/>T</input></td><td id="repl_dow_data_we" class="enabled" style="font-size: smaller;"><input type="radio" id="repl_dow_we" name="repl_dow" value="WE" title="Wednesday" onChange="onChangeRecurrenceInterval(this)"><br/>W</input></td><td id="repl_dow_data_th" class="enabled" style="font-size: smaller;"><input type="radio" id="repl_dow_th" name="repl_dow" value="TH" title="Thursday" onChange="onChangeRecurrenceInterval(this)"><br/>T</input></td><td id="repl_dow_data_fr" class="enabled" style="font-size: smaller;"><input type="radio" id="repl_dow_fr" name="repl_dow" value="FR" title="Friday" onChange="onChangeRecurrenceInterval(this)"><br/>F</input></td><td id="repl_dow_data_sa" class="enabled" style="font-size: smaller;"><input type="radio" id="repl_dow_sa" name="repl_dow" value="SA" title="Saturday" onChange="onChangeRecurrenceInterval(this)"><br/>S</input></td><td style="font-size: larger;">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</td>
+</tr>
+
+<tr>
+<td colspan="8"><script type="text/javascript">
+   eventDateSelector( "repl_start", now.getMonth(), now.getDate(), now.getFullYear(), " disabled" );
+</script></td>
+</tr>
+
+<tr>
+<td colspan="8"><input id="txnrange" type="range" min="1" max="2500" step="1" value="25" onChange="syncValue( this.id, 'txnlimit' )" title="Limit the total number of events that may be returned in a single transaction." /><br/>
+<input id="txnlimit" type="number" min="1" max="2500" size=4 onChange="syncValue( this.id, 'txnrange' )" /></td></tr>
+
+<tr><td colspan="8">&nbsp;</td></tr>
+<tr><td colspan="8"><button id="find" onClick="clickFind(this.form)" title="Search for the next event matching the criteria specified above">Find</button>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+<button id="repl" onClick="clickReplace(this.form)" title="Update the next matching event with the values above">Replace</button></td></tr>
+
+<tr><td colspan="8">&nbsp;</td></tr>
+
+<tr><td colspan="8"><div id="status">&nbsp;</div></td></tr>
+<tr><td colspan="8"><div class="container"><div class="content"><code id="debug"></code></div><span>&nbsp;</span></div></td></tr>
+
+</tbody>
+</table>
+</form>
+</body>
+</html>
+]]> 
+</Content>
+</Module>
