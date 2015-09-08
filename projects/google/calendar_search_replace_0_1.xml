@@ -743,14 +743,14 @@
 
          google.calendar.refreshEvents();
 
-//         var backButton = window.top.document.getElementsByClassName( 'ep-ea-btn-wrapper ep-ea-back-btn' );
-
+/*
          var backButton = window.top.document.getElementsByClassName( 'ep-ea-back-btn' );
 
          if ( backButton && backButton[ 0 ] )
          {
             backButton[ 0 ].click();
          }
+*/
       }
    }
 
