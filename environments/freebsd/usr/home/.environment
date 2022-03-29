@@ -1,0 +1,66 @@
+# General Environment
+
+setenv TZ      America/Los_Angeles
+
+setenv EDITOR		mg
+setenv PAGER		less
+setenv BLOCKSIZE	K
+
+setenv CLICOLOR		xterm-color       # some shells need this to enable colorized out
+
+export LSCOLORS='exfxcxdxbxegedabagacad'
+
+setenv GREP_OPTIONS	'--color=auto'
+setenv GREP_COLOR	'1;33'
+
+# set xterm title as userame@hostname:/current_directory
+case $TERM in
+   cons*)
+      bindkey "^?" delete-char
+      bindkey "\e[H" beginning-of-line
+      bindkey "\e[F" end-of-line
+      bindkey "\e[L" overwrite-mode
+      ;;
+   xterm*)
+#     function chpwd() { print -Pn "\e]0;%n@%m:%0d\a" }
+      bindkey "\e[3~" delete-char
+      bindkey "\e[1~" beginning-of-line
+      bindkey "\e[4~" end-of-line
+      bindkey "\e[2~" overwrite-mode
+
+
+      ;;
+   screen)
+      ;;
+esac
+
+# colorize LESS output for man pages
+
+# termcap terminfo  
+# ks      smkx      make the keypad send commands
+# ke      rmkx      make the keypad send digits
+# vb      flash     emit visual bell
+# mb      blink     start blink
+# md      bold      start bold
+# me      sgr0      turn off bold, blink and underline
+# so      smso      start standout (reverse video)
+# se      rmso      stop standout
+# us      smul      start underline
+# ue      rmul      stop underline
+
+# Bold Red, Blink Blue
+setenv LESS_TERMCAP_mb      $'\E[1;31m'     # begin blink
+setenv LESS_TERMCAP_md      $'\E[1;34m'     # begin bold
+setenv LESS_TERMCAP_me      $'\E[0m'        # reset bold/blink
+
+# Reverse brown
+setenv LESS_TERMCAP_so      $'\E[01;44;33m' # begin reverse video
+setenv LESS_TERMCAP_se      $'\E[0m'        # reset reverse video
+
+# Underline Purple
+setenv LESS_TERMCAP_us      $'\E[1;4;35m'     # begin underline
+setenv LESS_TERMCAP_ue      $'\E[0m'        # reset underline
+
+# Italic Cyan
+setenv LESS_TERMCAP_so      $'\E[5;30;43m'    # begin standout
+setenv LESS_TERMCAP_se      $'\E[0m'    # reset standout

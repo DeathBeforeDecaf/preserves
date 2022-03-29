@@ -1,0 +1,59 @@
+# Shell functions for zsh, bash and other compatible shells
+
+# Usage: xtract <file>
+# Description: extracts archived files (maybe)
+function xtract()
+{
+   if [ -f $1 ]; then
+      case $1 in
+         *.tar.bz2)  tar -jxvf $1        ;;
+         *.tar.gz)   tar -zxvf $1        ;;
+         *.bz2)      bzip2 -d $1         ;;
+         *.gz)       gunzip -d $1        ;;
+         *.tar)      tar -xvf $1         ;;
+         *.tgz)      tar -zxvf $1        ;;
+         *.zip)      unzip $1            ;;
+         *.Z)        uncompress $1       ;;
+         *.rar)      unrar x $1            ;;
+         *)          echo "'$1' Error - unknown archive type..." ;;
+      esac
+   else
+      echo "'$1' is not a valid file"
+  fi
+}
+
+# Usage: show <archive>
+# Description: view archive without unpack
+function show()
+{
+   if [ -f $1 ]; then
+      case $1 in
+         *.tar.bz2)     tar -jtf $1 ;;
+         *.tar.gz)      tar -ztf $1 ;;
+         *.tar)         tar -tf $1  ;;
+         *.tgz)         tar -ztf $1 ;;
+         *.zip)         unzip -l $1 ;;
+         *.rar)         rar vb $1   ;;
+         *)             echo "'$1' Error. Please go away" ;;
+      esac
+   else
+      echo "'$1' is not a valid archive"
+   fi
+}
+
+
+function prtc()
+{
+   if (( 0 == $# ))
+   then echo usage: prtc file1.src ...; fi
+
+   local wrkdir=$( pwd | awk '{ path = $1; if ( 62 < length( path )  ) path = sprintf( "/...%s", substr( $1, length( $1 ) - 58 ) ); print( path ); }' )
+
+   for i
+      do
+         local md5=$( openssl dgst -md5 $i | awk '{ print( toupper( $2 ) ); }' );
+#        local sha1=$( openssl dgst -sha1 $i | awk '{ print( toupper( $2 ) ); }' );
+#        local sha256=$( openssl dgst -sha256 $i | awk '{ print( toupper( $2 ) ); }' );
+         a2ps --define="md5:$md5" --define="wrkdir:$wrkdir" --medium=letter --columns=1 --rows=1 --portrait --chars-per-line=128 --lines-per-page=95 --major=rows --header='' --borders=no --sides=2 -E --prologue=sourcecode --left-title='$f' --center-title='' --right-title='Modified: $D{%FT%T}' --left-footer='md5(#{md5}):#{wrkdir}/' --footer='' --right-footer='$Q' $i;
+      done
+}
