@@ -1,0 +1,15 @@
+alias less 'less -x3 -R'
+
+alias ll 'ls -lAFG --color=always'
+alias la 'ls -AFG'
+alias lf 'ls -FA'
+
+alias j  'jobs -l'
+
+alias h 'history 25 | less'
+alias mx 'chmod +x'
+
+alias e "$EDITOR"
+
+alias ansi 'setenv TERM ansi'
+alias traceroute 'traceroute -I'
